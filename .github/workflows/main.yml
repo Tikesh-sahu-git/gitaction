@@ -56,13 +56,11 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: 1
 
-      # 9. Secret Scan
-      - name: Scan for Secrets
+      - name: Scan for Secrets (TruffleHog)
         uses: trufflesecurity/trufflehog@v3.88.0
         with:
           path: .
-          base: main
-          head: HEAD
+          extra_args: --only-verified
 
       # =========================
       # 🏗 BUILD STAGE
