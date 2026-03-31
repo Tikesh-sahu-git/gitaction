@@ -1,35 +1,46 @@
-# 1. Base image
+# =========================
+# 1. Base
+# =========================
 FROM node:20-alpine AS base
-
-# Enable pnpm
 RUN corepack enable
-
 WORKDIR /app
 
+# =========================
 # 2. Dependencies
+# =========================
 FROM base AS deps
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
+# =========================
 # 3. Builder
+# =========================
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build
 
-# 4. Production
-FROM base AS runner
+# =========================
+# 4. Runner (Optimized)
+# =========================
+FROM node:20-alpine AS runner
+
 WORKDIR /app
-
 ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
 
-# Copy only necessary files
-COPY --from=builder /app/.next ./.next
+# Security: non-root user
+RUN addgroup -S nextjs && adduser -S nextjs -G nextjs
+
+# Only copy required files (standalone build)
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/package.json ./package.json
-COPY --from=deps /app/node_modules ./node_modules
+
+USER nextjs
 
 EXPOSE 3000
 
-CMD ["pnpm", "start"]
+CMD ["node", "server.js"]
