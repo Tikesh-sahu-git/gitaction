@@ -42,9 +42,7 @@ jobs:
 
       
 
-      # 7. Test Coverage (optional)
-      - name: Generate Coverage
-        run: pnpm test -- --coverage
+
 
       # =========================
       # 🔐 SECURITY STAGE
