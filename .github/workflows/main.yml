@@ -1,16 +1,17 @@
-name: Next.js CI/CD with PNPM + GHCR
+name: Next.js DevSecOps + QA CI/CD with PNPM + GHCR
 
 on:
   push:
     branches: [ "main" ]
 
 jobs:
-  build-and-push:
+  pipeline:
     runs-on: ubuntu-latest
 
     permissions:
       contents: read
-      packages: write   # REQUIRED for GHCR
+      packages: write
+      security-events: write
 
     steps:
       # 1. Checkout
@@ -31,23 +32,78 @@ jobs:
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
-      # 5. Build App
+      # =========================
+      # 🧪 QA STAGE
+      # =========================
+
+      # 5. Lint Check
+      - name: Run Lint (ESLint)
+        run: pnpm lint
+
+      # 6. Run Unit Tests
+      - name: Run Tests
+        run: pnpm test
+
+      # 7. Test Coverage (optional)
+      - name: Generate Coverage
+        run: pnpm test -- --coverage
+
+      # =========================
+      # 🔐 SECURITY STAGE
+      # =========================
+
+      # 8. Dependency Scan
+      - name: Run Trivy FS Scan
+        uses: aquasecurity/trivy-action@v0.35.0
+        with:
+          scan-type: fs
+          severity: CRITICAL,HIGH
+          exit-code: 1
+
+      # 9. Secret Scan
+      - name: Scan for Secrets
+        uses: trufflesecurity/trufflehog@v3.88.0
+        with:
+          path: .
+          base: main
+          head: HEAD
+
+      # =========================
+      # 🏗 BUILD STAGE
+      # =========================
+
+      # 10. Build App
       - name: Build App
         run: pnpm build
 
-      # 6. Login to GHCR
-      - name: Login to GitHub Container Registry
+      # =========================
+      # 🐳 CONTAINER STAGE
+      # =========================
+
+      # 11. Login to GHCR
+      - name: Login to GHCR
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 12. Lowercase repo owner
       - name: Set lowercase repo owner
         run: echo "OWNER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
+      # 13. Build Docker Image
       - name: Build Docker Image
         run: docker build -t ghcr.io/${{ env.OWNER }}/nextjs-app:latest .
 
+      # 14. Scan Docker Image
+      - name: Scan Docker Image (Trivy)
+        uses: aquasecurity/trivy-action@v0.24.0
+        with:
+          image-ref: ghcr.io/${{ env.OWNER }}/nextjs-app:latest
+          severity: CRITICAL,HIGH
+          exit-code: 1
+
+      # 15. Push Image
       - name: Push Docker Image
         run: docker push ghcr.io/${{ env.OWNER }}/nextjs-app:latest
