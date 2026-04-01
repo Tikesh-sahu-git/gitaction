@@ -2,22 +2,19 @@ name: Next.js DevSecOps + QA CI/CD with PNPM + GHCR
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
-  pipeline:
-    runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-      packages: write
-      security-events: write
+  # =========================
+  # 📦 SETUP JOB
+  # =========================
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      cache-hit: ${{ steps.cache.outputs.cache-hit }}
 
     steps:
-      # =========================
-      # 📦 SETUP
-      # =========================
-
       - name: Checkout Code
         uses: actions/checkout@v5
 
@@ -29,55 +26,104 @@ jobs:
       - name: Enable PNPM
         run: corepack enable
 
+      - name: Cache PNPM
+        id: cache
+        uses: actions/cache@v3
+        with:
+          path: ~/.pnpm-store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
-      # =========================
-      # 🧪 QA STAGE
-      # =========================
+      - name: Upload node_modules
+        uses: actions/upload-artifact@v4
+        with:
+          name: node_modules
+          path: node_modules
 
-      - name: Run Lint (ESLint)
+
+  # =========================
+  # 🧪 QA + 🔐 SECURITY JOB
+  # =========================
+  qa-security:
+    runs-on: ubuntu-latest
+    needs: setup
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+
+      - name: Download node_modules
+        uses: actions/download-artifact@v4
+        with:
+          name: node_modules
+
+      - name: Run Lint
         run: pnpm lint
 
-      # =========================
-      # 🔐 SECURITY STAGE
-      # =========================
-
-      # Cache Trivy DB (faster scans ⚡)
       - name: Cache Trivy DB
         uses: actions/cache@v3
         with:
           path: .cache/trivy
           key: trivy-${{ runner.os }}
-          restore-keys: |
-            trivy-${{ runner.os }}
 
-      # Dependency Scan (SCA)
       - name: Run Trivy FS Scan
         uses: aquasecurity/trivy-action@v0.35.0
         with:
           scan-type: fs
           severity: CRITICAL,HIGH
           exit-code: 1
-          cache-dir: .cache/trivy
 
-      # Secret Scan
-      - name: Scan for Secrets (TruffleHog)
+      - name: Scan Secrets (TruffleHog)
         uses: trufflesecurity/trufflehog@v3.88.0
         with:
           path: .
           extra_args: --only-verified
 
-      # =========================
-      # 🏗 BUILD STAGE
-      # =========================
+
+  # =========================
+  # 🏗 BUILD JOB
+  # =========================
+  build:
+    runs-on: ubuntu-latest
+    needs: qa-security
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+
+      - name: Download node_modules
+        uses: actions/download-artifact@v4
+        with:
+          name: node_modules
 
       - name: Build App
         run: pnpm build
 
-      # =========================
-      # 🐳 CONTAINER STAGE
-      # =========================
+      - name: Upload Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: build
+          path: .next
+
+
+  # =========================
+  # 🐳 DOCKER JOB
+  # =========================
+  docker:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+
+      - name: Download Build
+        uses: actions/download-artifact@v4
+        with:
+          name: build
+          path: .next
 
       - name: Login to GHCR
         uses: docker/login-action@v4
@@ -92,24 +138,12 @@ jobs:
       - name: Build Docker Image
         run: docker build -t ghcr.io/${{ env.OWNER }}/nextjs-app:latest .
 
-      # Debug (ensure image exists ✅)
-      - name: Verify Docker Image
-        run: docker images
-
-      # Docker Image Scan (Trivy)
-      - name: Scan Docker Image (Trivy)
+      - name: Scan Docker Image
         uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: ghcr.io/${{ env.OWNER }}/nextjs-app:latest
-          format: table
-          ignore-unfixed: true
-          vuln-type: os,library
           severity: CRITICAL,HIGH
-          exit-code: 0   # ⚠️ don't break pipeline (recommended)
-
-      # =========================
-      # 🚀 DEPLOY (PUSH)
-      # =========================
+          exit-code: 0
 
       - name: Push Docker Image
         run: docker push ghcr.io/${{ env.OWNER }}/nextjs-app:latest
